@@ -1,0 +1,7 @@
+###### Requirements without Version ######`
+numpy
+pandas
+
+###### Requirements with Version Specifiers ######`
+tifffile >= 2020.11.26
+scikit-image >= 0.17.2
