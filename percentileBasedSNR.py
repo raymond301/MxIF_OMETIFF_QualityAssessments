@@ -21,6 +21,8 @@ import matplotlib.pyplot as plt
 
 
 from pprint import pprint
+#import warnings
+#warnings.filterwarnings("ignore")
 
 ### GLOBAL CONSTANTS ###
 omeExt = '*.ome.tiff'
@@ -139,7 +141,7 @@ def generateWholeBatchBoxplots_FOVs(pDf):
 	template = """
 	</br><div style="width:99%;">
 	<h3>SNR Distributions Across Dataset</h3>
-	<img src="data:image/png;base64, {}" alt="SNRp Boxplot Graph" />
+	<img style="max-width: 100%;" src="data:image/png;base64, {}" alt="SNRp Boxplot Graph" />
 	</div>
 	"""
 	return template.format(mainPlot64)
@@ -149,7 +151,7 @@ def generateWholeBatchSamples_FOVs(pDf):
 	nSamples = pDf['Sample'].nunique()
 	sns.set(style="ticks", palette="pastel")
 	#sns.set_theme(style="ticks", palette="pastel")
-	f, ax = plt.subplots(figsize=(nSamples, 6))
+	f, ax = plt.subplots(figsize=(int(nSamples/2), 4))
 	ax.set_yscale("log")
 	# Draw a nested boxplot to show bills by day and time
 	sns.boxplot(x="Sample", y="SNRp",width=4, hue="Sample", data=pDf)
@@ -163,9 +165,9 @@ def generateWholeBatchSamples_FOVs(pDf):
 		mainPlot64 = base64.b64encode(tmpfile.read()).decode('utf-8')
 
 	template = """
-	</br><div>
+	</br><div  style="width:90%;">
 	<h3>SNR Distributions Across Samples</h3>
-	<img src="data:image/png;base64, {}" alt="By Sample Boxplot Graph" />
+	<img style="max-width: 100%;" src="data:image/png;base64, {}" alt="By Sample Boxplot Graph" />
 	</div>
 	"""
 	return template.format(mainPlot64)
@@ -233,24 +235,28 @@ def getCutoffImages(dfSub):
 
 def getQualityPieChart(dfSub):
 	#create pie chart
+	plt.clf()
 	pData = dfSub.groupby("Quality")["Quality"].count()
-	pData.plot.pie(autopct="%.1f%%", figsize=(4,4));
+	pData.plot.pie(autopct="%.1f%%", figsize=(5,4))
+	fig = plt.gcf()
 	with tempfile.TemporaryFile(suffix=".png") as tmpfile:
-		plt.savefig(tmpfile, format="png") # File position is at the end of the file.
+		fig.savefig(tmpfile, format="png")
+		#plt.savefig(tmpfile, format="png") # File position is at the end of the file.
 		tmpfile.seek(0) # Rewind the file. (0: the beginning of the file)
 		mainPlot64 = base64.b64encode(tmpfile.read()).decode('utf-8')
 	template = """
 	<img src="data:image/png;base64, {}" alt="Quality PieChart" />
 	"""
+	plt.close()
 	return template.format(mainPlot64)
 
 def getQualityScatterPlot(dfSub):
-	f, ax = plt.subplots(figsize=(11, 5))
+	f, ax = plt.subplots(figsize=(15, 5))
 	ax.set_xscale("log")
 	graph = sns.scatterplot(y="NonBlankPercentage", x="SNRp", palette="deep", hue="Quality", data=dfSub, ax=ax)
 	graph.axvline(0.916, color='r') ### 2.5 ~ 0.916 Log
 	graph.axhline(0.05, color='r')
-	plt.legend(bbox_to_anchor=(1.05, 1), loc=2, borderaxespad=0.)
+	plt.legend(bbox_to_anchor=(0.93, 1), loc=2, borderaxespad=0.)
 	with tempfile.TemporaryFile(suffix=".png") as tmpfile:
 		plt.savefig(tmpfile, format="png") # File position is at the end of the file.
 		tmpfile.seek(0) # Rewind the file. (0: the beginning of the file)
@@ -258,11 +264,12 @@ def getQualityScatterPlot(dfSub):
 	template = """
 	<img src="data:image/png;base64, {}" alt="Quality Scatterplot" />
 	"""
+	plt.close()
 	return template.format(mainPlot64)
 
 
 def generateByMarkerSNRTable(pDf):
-	htmlList = ["<table class=\"minimalistBlack\">", "<tr><th>Marker</th><th>Poor Quality</th><th>Breakdown</th><th>Scatterplot</th></tr>"]
+	htmlList = ["</br><table class=\"minimalistBlack\">", "<tr><th>Marker</th><th>Poor Quality</th><th>Breakdown</th><th>Scatterplot</th></tr>"]
 
 	#Generate Quality Cutoffs => Make Parameters in future
 	pDf['Quality'] = "Okay"
@@ -298,7 +305,7 @@ def generateByMarkerSNRTable(pDf):
 if __name__ == '__main__':
 	parser = argparse.ArgumentParser(description='Compile Percentile SNR metrics for assessment')
 	parser.add_argument('-d', '--rootdir', help='Directory Containing OME.TIFFS', nargs='?', type=str, dest="inDir", metavar="DIR",required=True)
-	parser.add_argument('--stitched', action='store_true', default=False)
+	#parser.add_argument('--stitched', action='store_true', default=False)
 	parser.add_argument('--save_data', action='store_true', default=False)
 	args = parser.parse_args()
 
