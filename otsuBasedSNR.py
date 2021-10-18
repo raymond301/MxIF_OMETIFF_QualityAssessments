@@ -8,6 +8,7 @@ from datetime import datetime
 import tempfile
 ## Image by OpenCV
 import cv2, base64
+from skimage import data, img_as_float, io, filters
 ## Number crunching
 import numpy as np
 #from scipy import stats
@@ -72,12 +73,17 @@ def getImageStats(opnImg):
 	flatFull = opnImg.ravel()
 	statDict["ImageP10"] = float(np.percentile(flatFull,10,0))
 	statDict["ImageP90"] = float(np.percentile(flatFull,90,0))
+	### Blur Detection: https://www.pyimagesearch.com/2015/09/07/blur-detection-with-opencv/
+	threshold = filters.threshold_otsu(opnImg)
+	statDict['OtsuThreshold'] = int(threshold)
+	#pprint("Len of AF Img Flat:"+str(len(afImgFlat)))
+	statDict['OtsuSignalMean'] = float( np.mean( flatFull[np.where(flatFull > threshold)] ) )
+	statDict['OtsuNoiseMean'] = float( np.mean( flatFull[np.where(flatFull < threshold)] ) )
 
-	if statDict["ImageP10"] == 0:
-		statDict["ImageP10"] = 0.1
-		statDict["SNRp"] = float(statDict["ImageP90"] / 10)
+	if statDict["OtsuNoiseMean"] == 0:
+		statDict["SNRo"] = float(statDict["OtsuSignalMean"] / 10)
 	else:
-		statDict["SNRp"] = float(statDict["ImageP90"] / statDict["ImageP10"])
+		statDict["SNRo"] = float(statDict["OtsuSignalMean"] / statDict["OtsuNoiseMean"])
 
 	imgSub = flatFull[np.where(flatFull > 1)]
 	statDict["NonBlankMean"] = float(np.mean(imgSub))
@@ -118,16 +124,16 @@ def findAllImageMetrics(fileDict):
 
 def generateWholeBatchBoxplots_FOVs(pDf):
 	nMarks = pDf['Marker'].nunique()
-	grouped = pDf.loc[:,['Marker', 'SNRp']].groupby(['Marker']).median().sort_values(by='SNRp', ascending=False)
+	grouped = pDf.loc[:,['Marker', 'SNRo']].groupby(['Marker']).median().sort_values(by='SNRo', ascending=False)
 	#sns.set_theme(style="ticks")
 	sns.set(style="ticks")
 	# Initialize the figure with a logarithmic x axis
 	f, ax = plt.subplots(figsize=(25, nMarks))
 	ax.set_xscale("log")
 	# Plot the orbital period with horizontal boxes
-	sns.boxplot(x="SNRp", y="Marker", data=pDf, order=grouped.index, whis=[0, 100], width=.5, palette="vlag")
+	sns.boxplot(x="SNRo", y="Marker", data=pDf, order=grouped.index, whis=[0, 100], width=.5, palette="vlag")
 	# Add in points to show each observation
-	sns.stripplot(x="SNRp", y="Marker", data=pDf, order=grouped.index, size=2, color=".3", linewidth=0)
+	sns.stripplot(x="SNRo", y="Marker", data=pDf, order=grouped.index, size=2, color=".3", linewidth=0)
 	# Tweak the visual presentation
 	ax.xaxis.grid(True)
 	ax.set(ylabel="")
@@ -141,7 +147,7 @@ def generateWholeBatchBoxplots_FOVs(pDf):
 	template = """
 	</br><div style="width:99%;">
 	<h3>SNR Distributions Across Dataset</h3>
-	<img style="max-width: 100%;" src="data:image/png;base64, {}" alt="SNRp Boxplot Graph" />
+	<img style="max-width: 100%;" src="data:image/png;base64, {}" alt="SNRo Boxplot Graph" />
 	</div>
 	"""
 	return template.format(mainPlot64)
@@ -154,7 +160,7 @@ def generateWholeBatchSamples_FOVs(pDf):
 	f, ax = plt.subplots(figsize=(int(nSamples/1.2)+3, 6))
 	ax.set_yscale("log")
 	# Draw a nested boxplot to show bills by day and time
-	sns.boxplot(x="Sample", y="SNRp",width=4, hue="Sample", data=pDf)
+	sns.boxplot(x="Sample", y="SNRo",width=4, hue="Sample", data=pDf)
 	ax.get_legend().remove()
 	sns.despine(offset=10, trim=True)
 	ax.tick_params(axis='x', rotation=20)
@@ -253,7 +259,7 @@ def getQualityPieChart(dfSub):
 def getQualityScatterPlot(dfSub):
 	f, ax = plt.subplots(figsize=(14, 5))
 	ax.set_xscale("log")
-	graph = sns.scatterplot(y="NonBlankPercentage", x="SNRp", palette="deep", hue="Quality", data=dfSub, ax=ax)
+	graph = sns.scatterplot(y="NonBlankPercentage", x="SNRo", palette="deep", hue="Quality", data=dfSub, ax=ax)
 	graph.axvline(0.916, color='r') ### 2.5 ~ 0.916 Log
 	graph.axhline(0.05, color='r')
 	plt.legend(bbox_to_anchor=(0.93, 1), loc=2, borderaxespad=0.)
@@ -293,7 +299,7 @@ def generateByMarkerSNRTable(pDf):
 
 
 if __name__ == '__main__':
-	parser = argparse.ArgumentParser(description='Compile Percentile SNR metrics for assessment')
+	parser = argparse.ArgumentParser(description='Compile Otsu Threshold SNR metrics for assessment')
 	parser.add_argument('-d', '--rootdir', help='Directory Containing OME.TIFFS', nargs='?', type=str, dest="inDir", metavar="DIR",required=True)
 	#parser.add_argument('--stitched', action='store_true', default=False)
 	parser.add_argument('--save_data', action='store_true', default=False)
@@ -305,19 +311,19 @@ if __name__ == '__main__':
 	#Generate Quality Cutoffs => Make Parameters in future
 	allDataStatsDF['Quality'] = "Okay"
 	allDataStatsDF.loc[(allDataStatsDF.ImageP10 < 2),'Quality']='Lower Bound Poor'
-	allDataStatsDF.loc[(allDataStatsDF.SNRp <= 1.3),'Quality']='Questionable'
-	allDataStatsDF.loc[(allDataStatsDF.SNRp <= 0.8),'Quality']='Poor'
+	allDataStatsDF.loc[(allDataStatsDF.SNRo <= 1.3),'Quality']='Questionable'
+	allDataStatsDF.loc[(allDataStatsDF.SNRo <= 0.8),'Quality']='Poor'
 	allDataStatsDF.loc[(allDataStatsDF.NonBlankPercentage <= 0.1),'Quality']='Questionable'
 	allDataStatsDF.loc[(allDataStatsDF.NonBlankPercentage < 0.05),'Quality']='Poor'
 
 	# Add option to write Panda Dataframe out to csv
 	if(args.save_data):
-		allDataStatsDF.to_csv("snrp_data.csv")
+		allDataStatsDF.to_csv("snro_data.csv")
 		#os.getcwd()
 		#allDataStatsDF = pd.read_csv(r'Y:\Studies\Raymond\TempMOQA\snrp_data.csv')
 		#pDf = allDataStatsDF
 
-	Html_Out_file= open("snr_percentile_report.html","w")
+	Html_Out_file= open("snr_otsu_report.html","w")
 	Html_Out_file.write(html_str_css)
 	h1 = getSummaryHTMLTable(allDataStatsDF)
 	Html_Out_file.write(h1)
