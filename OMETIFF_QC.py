@@ -11,6 +11,7 @@ import cv2, base64
 ## Number crunching
 import numpy as np
 #from scipy import stats
+from skimage import data, img_as_float, io, filters
 ## Parse OME
 import tifffile as tf
 import xml.etree.ElementTree as ET
@@ -20,12 +21,13 @@ import pandas as pd
 import matplotlib.pyplot as plt
 
 
-#from pprint import pprint
+from pprint import pprint
 import warnings
 warnings.filterwarnings("ignore")
 
 ### GLOBAL CONSTANTS ###
 omeExt = '*.ome.tiff'
+verbose = False
 
 ########### OME.TIFF File Functions ###########
 def findAllOMEFiles (baseDir, typ):
@@ -60,8 +62,8 @@ def parseMarkerNamesFromOMETIFF(openOME):
 
 
 ########### Image Calculations Functions ###########
+#opnImg = openOME.pages[idx].asarray()
 def getImageStats(opnImg):
-	#opnImg = cv2.imread(imgFH)
 	statDict = {
 			'ImageMin':int(np.amin(opnImg)),
 			'ImageMax':int(np.amax(opnImg)),
@@ -72,20 +74,58 @@ def getImageStats(opnImg):
 	flatFull = opnImg.ravel()
 	statDict["ImageP10"] = float(np.percentile(flatFull,10,0))
 	statDict["ImageP90"] = float(np.percentile(flatFull,90,0))
-
 	if statDict["ImageP10"] == 0:
 		statDict["ImageP10"] = 0.1
 		statDict["SNRp"] = float(statDict["ImageP90"] / 10)
 	else:
 		statDict["SNRp"] = float(statDict["ImageP90"] / statDict["ImageP10"])
 
+	## Calculate percentages
 	imgSub = flatFull[np.where(flatFull > 1)]
 	statDict["NonBlankMean"] = float(np.mean(imgSub))
 	statDict["NonBlankPercentage"] = float(len(imgSub)) / float(len(flatFull))
+
+	### HANDLE SPECIAL EXCEPTION - WHEN IMAGE IS 100% BLANK!!!
+	if statDict['ImageMax'] == 0:
+		if verbose:
+			print("WARNING: IMAGE IS COMPLETLY BLANK!!")
+		statDict['OtsuThreshold'] = 0
+		statDict['OtsuSignalMean'] = 0.0
+		statDict['OtsuNoiseMean'] = 0.0
+		statDict["SNRo"] = 0.0
+		statDict["BrennerScore"] = 0.0
+	else:
+		"""
+		Signal to Noise Ratio based on otsu thresholding
+		"""
+		### Blur Detection: https://www.pyimagesearch.com/2015/09/07/blur-detection-with-opencv/
+		threshold = filters.threshold_otsu(opnImg)
+		statDict['OtsuThreshold'] = int(threshold)
+		#pprint("Len of AF Img Flat:"+str(len(afImgFlat)))
+		statDict['OtsuSignalMean'] = float( np.mean( flatFull[np.where(flatFull > threshold)] ) )
+		statDict['OtsuNoiseMean'] = float( np.mean( flatFull[np.where(flatFull < threshold)] ) )
+
+		if statDict["OtsuNoiseMean"] == 0:
+			statDict["SNRo"] = float(statDict["OtsuSignalMean"] / 10)
+		else:
+			statDict["SNRo"] = float(statDict["OtsuSignalMean"] / statDict["OtsuNoiseMean"])
+
+		"""
+	    An implementation of the Brenner autofocus metric
+	    Brenner, J. F. et al (1976). An automated microscope for cytologic research
+	    a preliminary evaluation. Journal of Histochemistry & Cytochemistry, 24(1),
+	    100–111. http://doi.org/10.1177/24.1.1254907
+	    """
+		rows = opnImg.shape[0]
+		columns = opnImg.shape[1] - 2
+		repImg = np.zeros((rows, columns))
+		repImg[:] = ((opnImg[:, 0:-2] - opnImg[:, 2:]) ** 2)
+		statDict["BrennerScore"] = repImg.sum()
+
 	return statDict
 ########### Image Calculations Functions ###########
 
-
+#fileDict = t2
 def findAllImageMetrics(fileDict):
 	premetrics = []
 	for sample, omes in fileDict.items():
@@ -96,11 +136,15 @@ def findAllImageMetrics(fileDict):
 			## Open OME.TIFF
 			openOME = tf.TiffFile(omFh);
 			nDim = len(openOME.pages)
-			if oI == 0:
+			if verbose:
 				print("    "+fov+" with "+str(nDim)+" markers")
-				print("    ...")
-			if oI == totalOME:
-				print("    "+fov+" with "+str(nDim)+" markers")
+			else:
+				if oI == 0:
+					print("    "+fov+" with "+str(nDim)+" markers")
+					print("    ...")
+				if oI == totalOME:
+					print("    "+fov+" with "+str(nDim)+" markers")
+
 			makerList = parseMarkerNamesFromOMETIFF(openOME)
 			## ASSERT METADATA INTEGRITY
 			if nDim != len(makerList):
@@ -250,12 +294,12 @@ def getQualityPieChart(dfSub):
 	plt.close()
 	return template.format(mainPlot64)
 
-def getQualityScatterPlot(dfSub):
+def getQualityScatterPlot(dfSub, metric):
 	f, ax = plt.subplots(figsize=(14, 5))
 	ax.set_xscale("log")
-	graph = sns.scatterplot(y="NonBlankPercentage", x="SNRp", palette="deep", hue="Quality", data=dfSub, ax=ax)
+	graph = sns.scatterplot(y="NonBlankPercentage", x=metric, palette="deep", hue="Quality", data=dfSub, ax=ax)
 	graph.axvline(0.916, color='r') ### 2.5 ~ 0.916 Log
-	graph.axhline(0.05, color='r')
+	graph.axhline(0.03, color='r')
 	plt.legend(bbox_to_anchor=(0.93, 1), loc=2, borderaxespad=0.)
 	with tempfile.TemporaryFile(suffix=".png") as tmpfile:
 		plt.savefig(tmpfile, format="png") # File position is at the end of the file.
@@ -270,9 +314,11 @@ def getQualityScatterPlot(dfSub):
 
 def generateByMarkerSNRTable(pDf):
 	htmlList = ["</br><div><h3>SNR Thresholds Per Marker</h3>","<table class=\"minimalistBlack\">",
-			 "<tr><th>Marker</th><th>Poor Quality</th><th>Breakdown</th><th>Scatterplot</th></tr>"]
+			 "<tr><th>Marker</th><th>Poor Quality</th><th>Breakdown</th><th>Percentile Scatterplot</th><th>Otsu Scatterplot</th><th>Brenner Score</th></tr>"]
 	template = """
 	<tr>
+	<td>{}</td>
+	<td>{}</td>
 	<td>{}</td>
 	<td>{}</td>
 	<td>{}</td>
@@ -285,8 +331,10 @@ def generateByMarkerSNRTable(pDf):
 		dfSub = pDf[pDf['Marker']==mk]
 		lostFovs = getCutoffImages(dfSub)
 		pieChart = getQualityPieChart(dfSub)
-		scatterPlot = getQualityScatterPlot(dfSub)
-		htmlList.append(  template.format(mk, lostFovs, pieChart, scatterPlot)  )
+		scatterPlot = getQualityScatterPlot(dfSub,"SNRp")
+		scatterPlot2 = getQualityScatterPlot(dfSub,"SNRo")
+		scatterPlot3 = getQualityScatterPlot(dfSub,"BrennerScore")
+		htmlList.append(  template.format(mk, lostFovs, pieChart, scatterPlot, scatterPlot2, scatterPlot3)  )
 	htmlList.append( "</table></div>" )
 	return '\n'.join(htmlList)
 
@@ -294,30 +342,50 @@ def generateByMarkerSNRTable(pDf):
 
 if __name__ == '__main__':
 	parser = argparse.ArgumentParser(description='Compile Percentile SNR metrics for assessment')
-	parser.add_argument('-d', '--rootdir', help='Directory Containing OME.TIFFS', nargs='?', type=str, dest="inDir", metavar="DIR",required=True)
+	parser.add_argument('-i', '--inputdir', help='Input OME.TIFFs directory.', nargs='?', type=str, dest="inDir",
+						metavar="DIR", required=True)
+	parser.add_argument('-o', '--outputdir', help='Output directory.', nargs='?', type=str, dest="outDir",
+						metavar="DIR")
 	#parser.add_argument('--stitched', action='store_true', default=False)
 	parser.add_argument('--save_data', action='store_true', default=False)
 	args = parser.parse_args()
 
 	allFileDict = findAllOMEFiles(args.inDir, False)
+	# TESTING
+	#allFileDict = findAllOMEFiles("Q:\OME_TIFFs", False)
+	#tmp1 = 'IH_37' #next(iter(allFileDict))
+	#testing1 = { tmp1 : [allFileDict[tmp1][9]] }
+
 	allDataStatsDF = findAllImageMetrics(allFileDict)
+	#allDataStatsDF = findAllImageMetrics(testing1)
+
+
+	if allDataStatsDF.empty:
+		raise Exception('No Statistics Calculated!')
 
 	#Generate Quality Cutoffs => Make Parameters in future
 	allDataStatsDF['Quality'] = "Okay"
-	allDataStatsDF.loc[(allDataStatsDF.ImageP10 < 2),'Quality']='Lower Bound Poor'
+	allDataStatsDF.loc[(allDataStatsDF.ImageP10 < 2),'Quality']='Lower Bound Issue'
 	allDataStatsDF.loc[(allDataStatsDF.SNRp <= 1.3),'Quality']='Questionable'
 	allDataStatsDF.loc[(allDataStatsDF.SNRp <= 0.8),'Quality']='Poor'
-	allDataStatsDF.loc[(allDataStatsDF.NonBlankPercentage <= 0.1),'Quality']='Questionable'
-	allDataStatsDF.loc[(allDataStatsDF.NonBlankPercentage < 0.05),'Quality']='Poor'
+	allDataStatsDF.loc[(allDataStatsDF.SNRo <= 1.3),'Quality']='Questionable'
+	allDataStatsDF.loc[(allDataStatsDF.SNRo <= 0.8),'Quality']='Poor'
+	allDataStatsDF.loc[(allDataStatsDF.NonBlankPercentage <= 0.06),'Quality']='Questionable'
+	allDataStatsDF.loc[(allDataStatsDF.NonBlankPercentage < 0.02),'Quality']='Poor'
 
 	# Add option to write Panda Dataframe out to csv
 	if(args.save_data):
-		allDataStatsDF.to_csv("snrp_data.csv")
-		#os.getcwd()
-		#allDataStatsDF = pd.read_csv(r'Y:\Studies\Raymond\TempMOQA\snrp_data.csv')
-		#pDf = allDataStatsDF
+		outPath = "snr_data.csv"
+		if args.outDir is not None:
+			print( "outDir has been set (value is {})".format(args.outDir) )
+			outPath = os.path.normpath(os.path.join(args.outDir, "snr_data.csv"))
+		allDataStatsDF.to_csv(outPath)
 
-	Html_Out_file= open("snr_percentile_report.html","w")
+	outPath = "qc_report.html"
+	if args.outDir is not None:
+		outPath = os.path.normpath(os.path.join(args.outDir, "qc_report.html"))
+	Html_Out_file= open(outPath,"w")
+
 	Html_Out_file.write(html_str_css)
 	h1 = getSummaryHTMLTable(allDataStatsDF)
 	Html_Out_file.write(h1)
