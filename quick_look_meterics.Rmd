@@ -1,0 +1,159 @@
+---
+title: "Untitled"
+output: html_document
+date: "2023-10-31"
+---
+
+```{r setup, include=FALSE}
+knitr::opts_chunk$set(echo = TRUE)
+
+library(tidyverse)
+library(grid)
+library(gridExtra)
+library(Rtsne)
+library(viridis)
+library(scales)
+library(ggpubr)
+
+```
+
+
+
+```{r cars}
+baseInput <- "/research/bsi/projects/staff_analysis/m088378/MetericMaking/DATA/"
+allMetericData <- NULL
+
+# fh<-paste0(baseInput,"")
+
+if(file.exists("AllPanelsOfData.rds")){
+  allMetericData <- readRDS("AllPanelsOfData.rds")
+} else {
+  for( fh in list.files(baseInput, full.names = T)){
+    #print(fh)
+    #if( grepl("Tonsil", basename(fh))){
+    df <- read_csv(fh, show_col_types = FALSE) %>% mutate(Region = as.character(Region))
+    ### Adapt the Rounds to a standard Index
+    convTbl <- data.frame(Round = sort(unique(df$Round))) %>% 
+      mutate(rnd = as.numeric(gsub("S",'',Round))) %>%
+      mutate(rnd = as.numeric(gsub("\\.",'',Round))) %>%
+      arrange(rnd) %>% rownames_to_column() %>% rename(RoundIndex = rowname) %>%
+      select(-rnd)
+    df <- merge(df, convTbl, by = "Round", all.x = T) 
+    print(paste("  ",basename(fh),"row:",nrow(df),"col:",length(names(df))))
+    allMetericData <- bind_rows(allMetericData, df)
+    #}
+  }
+  
+  # sort(unique(allMetericData$Marker))
+  allMetericData <- allMetericData %>% mutate(Marker = toupper(Marker)) %>%
+    mutate(Marker = if_else(Marker=="CASPASE3", "CASP3",Marker)) %>% 
+    mutate(Marker = if_else(Marker=="CASPASE-3", "CASP3",Marker)) %>% 
+    mutate(Marker = if_else(Marker=="B2MG", "B2M",Marker)) %>% 
+    mutate(Marker = if_else(Marker=="GALECTIN9", "GAL9",Marker)) %>% 
+    mutate(Marker = if_else(Marker=="HLA-I", "HLAI",Marker))  %>% 
+    mutate(Marker = if_else(Marker=="HLA-II", "HLAII",Marker))  %>% 
+    mutate(Marker = if_else(Marker=="NAK", "NAKATPASE",Marker)) %>%
+    mutate(Marker = if_else(Marker=="S6A", "S6",Marker)) %>%
+    mutate(Marker = if_else(Marker=="CDS6", "S6",Marker)) %>%
+    mutate(Marker = if_else(Marker=="T-BET", "TBET",Marker)) %>%
+    mutate(RoundIndex = as.numeric(RoundIndex)) %>%
+    mutate(RoundIndex = if_else(Platform == "CellDive",(RoundIndex-1),RoundIndex ))
+
+  
+  saveRDS(allMetericData,"AllPanelsOfData.rds")
+}
+
+#df1 <- read_csv("DATA/Panel_Metrics_SLIDE-1942_20231031.csv")
+names(allMetericData)
+```
+
+## How dark are these image? How variable is the IF Capture per marker?
+
+```{r look-001, fig.width=7, fig.height=15, warning=FALSE}
+
+ggplot(allMetericData, aes(x=reorder(Marker, NonBlankPercentage, FUN = median), y=NonBlankPercentage, fill=Marker))+geom_boxplot()+coord_flip()+
+            theme_minimal()+ggtitle("Percentage Pixels that are Not Blank (Pixel > 0)")+xlab('')+
+            theme(axis.text.x=element_text(angle=30, hjust=1),legend.position = 'none') 
+
+```
+
+# How often have we put the same Marker in the same/different position in the Panel design?
+
+```{r look-002, fig.width=9, fig.height=4, warning=FALSE}
+#ggplot(df1, aes(x=log(Percentile5),y=SNRz,color=NonBlankPercentage))+geom_point()+
+#            theme_minimal()+ggtitle("SNR Zscore vs 5th P")+ylab('')+
+#            theme(axis.text.x=element_text(angle=30, hjust=1)) 
+
+
+# sort(unique(allMetericData$Marker))
+
+
+tmp <- allMetericData %>% group_by(Marker,RoundIndex) %>% summarise(n = n()) %>% 
+  mutate(RoundIndex = as.numeric(RoundIndex)) %>% filter(!grepl("DAPI",Marker)) %>%
+  filter(Marker %in% c('CD4','CD45'))
+
+ggplot(tmp, aes(x=RoundIndex, y=reorder(Marker, RoundIndex, FUN = median), size=n, color=n))+ geom_point()+
+  theme_minimal()+ggtitle("Frequency of Panel Design Round")+ylab('')
+
+
+```
+
+
+```{r look-003, fig.width=6, fig.height=4, warning=FALSE}
+
+tbl2 <- allMetericData %>% filter(Marker == "S6")
+
+
+table(tbl2$Marker, tbl2$RoundIndex, tbl2$Platform)
+
+
+allMetericData 
+
+
+
+ggplot(tbl2, aes(y=Mean, x=SNRz))+geom_point()
+
+
+ggplot(tbl2, aes(y=Mean, x=as.character(RoundIndex)))+geom_boxplot()+ggtitle("S6 Average IF intensity")
+ggplot(tbl2, aes(y=SNRp, x=as.character(RoundIndex)))+geom_boxplot()+scale_y_continuous(trans='log10')+facet_grid(. ~ Fluor)
+
+
+```
+
+
+
+
+# What is the relationship between the Maximum captured pixel value and conjugation?
+
+```{r look-004, fig.width=12, fig.height=6, warning=FALSE}
+
+allMetericData <- allMetericData %>% mutate(Fluor = if_else(Fluor == "FITC", "Cy2", Fluor))
+tbl2 <- allMetericData %>% filter(Fluor != "DAPI")
+
+ggplot(tbl2, aes(x=`Fluor`, y=Max, fill=Fluor))+geom_boxplot()+
+  facet_wrap(Platform ~ .)+
+  stat_compare_means( aes(method='spearman', group = Fluor, label = paste0(..p.signif..," (",p.format,")")))
+
+
+nrow(allMetericData)
+
+sort(unique(allMetericData$Sample))
+
+
+```
+
+
+```{r look-005, fig.width=12, fig.height=6, warning=FALSE}
+allMetericData %>% group_by(Marker, Fluor, RoundIndex) %>% summarise(cnt = n()) %>% group_by(Marker) %>% 
+  summarise(posCnt = n(), obsCnt = sum(cnt) ) %>% arrange(desc(posCnt),desc(obsCnt))
+
+
+names(allMetericData)
+
+sort(unique(allMetericData$Sample))
+
+```
+
+
+
+
